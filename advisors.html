@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Advisors | Strivon Athletics</title>
+<meta name="description" content="Meet the current D3 student-athletes who advise Strivon Athletics recruits.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="floating-nav">
+  <a href="index.html" class="nav-logo">Strivon<sup>*</sup></a>
+  <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="tabs" id="tabs">
+    <a href="index.html" class="tab-link">Home</a>
+    <a href="how-it-works.html" class="tab-link">How It Works</a>
+    <a href="advisors.html" class="tab-link active">Advisors</a>
+    <a href="resources.html" class="tab-link">Resources</a>
+    <a href="pricing.html" class="tab-link">Pricing</a>
+    <a href="book-a-call.html" class="tab-link">Book a Call</a>
+  </div>
+</nav>
+
+<main class="page-content">
+
+  <section class="section">
+    <div class="section-banner">
+      <p class="eyebrow">Advisors</p>
+      <h2>Meet athletes who have been through it.</h2>
+    </div>
+
+    <div class="section-inner">
+      <p class="card-hint">More advisors are added as they're approved &mdash; view a profile to book a call with them.</p>
+
+      <div class="advisor-grid" data-advisor-grid></div>
+    </div>
+  </section>
+
+  <!-- Advisor application -->
+  <section class="section panel-bg-section">
+    <div class="section-inner">
+      <div class="contact-card" style="grid-template-columns: 1fr 1.4fr;">
+        <div>
+          <p class="eyebrow">Join the Network</p>
+          <h2>Are you a current D3 athlete?</h2>
+          <p class="lead">Apply to become an advisor. We read every application and reach out if it's a fit &mdash; approved advisors get added to this page.</p>
+        </div>
+
+        <!--
+          Submits directly into the "Strivon Athletics – Advisor Application"
+          Google Form's response Sheet, without sending the applicant to
+          Google's page. If you ever recreate the Google Form, these
+          entry.XXXXXXXXX values and the action URL will need to be updated
+          to match (ask Claude — same process as before).
+        -->
+        <form id="advisorForm" class="contact-form"
+              action="https://docs.google.com/forms/d/e/1FAIpQLScVVh-zs8g6YGrSRFbgUZoMnAi-VLyRtGmROhRV54614l3yYg/formResponse"
+              method="POST" target="hidden_iframe">
+          <label>
+            Name
+            <input type="text" name="entry.1667262393" required>
+          </label>
+          <label>
+            Email
+            <input type="email" name="entry.363040003" required>
+          </label>
+          <label>
+            School
+            <input type="text" name="entry.542906988" required>
+          </label>
+          <label>
+            Sport
+            <input type="text" name="entry.1342427231" required>
+          </label>
+          <label>
+            <span>Major <span class="field-optional">(optional)</span></span>
+            <input type="text" name="entry.668756689">
+          </label>
+
+          <p class="field-group-note">A few optional prompts &mdash; answer whichever are easiest, skip the rest.</p>
+
+          <label>
+            <span>What's one thing you wish you knew before you started recruiting? <span class="field-optional">(optional)</span></span>
+            <input type="text" name="entry.2145151780" placeholder="Keep it short">
+          </label>
+          <label>
+            <span>What made your school the right fit for you? <span class="field-optional">(optional)</span></span>
+            <input type="text" name="entry.665627432" placeholder="Keep it short">
+          </label>
+          <label>
+            <span>Anything else you'd like us to know? <span class="field-optional">(optional)</span></span>
+            <textarea name="entry.39435945" rows="3"></textarea>
+          </label>
+
+          <button type="submit" class="btn-pill">
+            <span>Submit Application</span>
+            <span class="arrow-circle">&rarr;</span>
+          </button>
+          <p class="form-status" id="advisorFormStatus" hidden>Thanks &mdash; your application was submitted.</p>
+        </form>
+        <iframe name="hidden_iframe" id="hiddenIframe" style="display:none;"></iframe>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <nav class="footer-nav">
+      <a href="index.html">Home</a>
+      <a href="how-it-works.html">How It Works</a>
+      <a href="advisors.html">Advisors</a>
+      <a href="resources.html">Resources</a>
+      <a href="pricing.html">Pricing</a>
+      <a href="contact.html">Contact</a>
+      <a href="https://instagram.com/strivonathletics" target="_blank" rel="noopener">Instagram</a>
+      <a href="terms.html">Terms</a>
+      <a href="privacy.html">Privacy</a>
+    </nav>
+    <p class="footer-disclaimer">We provide recruiting guidance based on personal experience and general information. We do not guarantee admission, coach support, roster placement, or recruiting outcomes.</p>
+    <span class="footer-copy">&copy; 2026 Strivon Athletics</span>
+  </div>
+</footer>
+
+<script src="advisors-data.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
