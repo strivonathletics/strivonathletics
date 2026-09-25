@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Advisors | Strivon Athletics</title>
-<meta name="description" content="Meet the current D3 student-athletes who advise Strivon Athletics recruits.">
+<title>Mentors | Strivon Athletics</title>
+<meta name="description" content="Meet the current D3 student-athletes who mentor Strivon Athletics recruits one-on-one.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,7 +20,7 @@
   <div class="tabs" id="tabs">
     <a href="index.html" class="tab-link">Home</a>
     <a href="how-it-works.html" class="tab-link">How It Works</a>
-    <a href="advisors.html" class="tab-link active">Advisors</a>
+    <a href="advisors.html" class="tab-link active">Mentors</a>
     <a href="resources.html" class="tab-link">Resources</a>
     <a href="pricing.html" class="tab-link">Pricing</a>
     <a href="book-a-call.html" class="tab-link">Book a Call</a>
@@ -29,27 +29,34 @@
 
 <main class="page-content">
 
-  <section class="section">
-    <div class="section-banner">
-      <p class="eyebrow">Advisors</p>
-      <h2>Meet athletes who have been through it.</h2>
-    </div>
+  <div class="editorial-header">
+    <p class="eyebrow">Mentors</p>
+    <h2>Meet athletes who have been through it.</h2>
+    <p class="lead">Every mentor here is a current college athlete who recently went through high-academic D3 recruiting themselves &mdash; view a profile to see their school, background, and book a private one-on-one call.</p>
+  </div>
 
+  <section class="section" style="padding-top: 0; padding-bottom: 64px;">
     <div class="section-inner">
-      <p class="card-hint">More advisors are added as they're approved &mdash; view a profile to book a call with them.</p>
-
+      <p class="filter-banner" data-school-filter-banner hidden></p>
       <div class="advisor-grid" data-advisor-grid></div>
+
+      <!-- How We Choose Our Mentors -->
+      <div class="section-inner narrow" style="text-align: center; padding: 0; margin-top: var(--space-7);">
+        <p class="eyebrow">How We Choose Our Mentors</p>
+        <h2>How we choose our mentors.</h2>
+        <p class="lead" style="margin-left: auto; margin-right: auto;">We look for mentors who went through the high-academic D3 process recently, can explain it clearly, and actually want to help. They're sharing their own experience, not making admissions decisions or speaking for any school.</p>
+      </div>
     </div>
   </section>
 
-  <!-- Advisor application -->
+  <!-- Mentor application -->
   <section class="section panel-bg-section">
     <div class="section-inner">
       <div class="contact-card" style="grid-template-columns: 1fr 1.4fr;">
         <div>
           <p class="eyebrow">Join the Network</p>
           <h2>Are you a current D3 athlete?</h2>
-          <p class="lead">Apply to become an advisor. We read every application and reach out if it's a fit &mdash; approved advisors get added to this page.</p>
+          <p class="lead">Apply to become a mentor. We read every application and reach out if it's a fit &mdash; approved mentors get added to this page.</p>
         </div>
 
         <!--
@@ -81,6 +88,10 @@
           <label>
             <span>Major <span class="field-optional">(optional)</span></span>
             <input type="text" name="entry.668756689">
+          </label>
+          <label>
+            What did your own recruiting process look like, step by step?
+            <textarea name="entry.367402293" rows="3" placeholder="This helps us write a clearer bio for your profile" required></textarea>
           </label>
 
           <p class="field-group-note">A few optional prompts &mdash; answer whichever are easiest, skip the rest.</p>
@@ -116,7 +127,7 @@
     <nav class="footer-nav">
       <a href="index.html">Home</a>
       <a href="how-it-works.html">How It Works</a>
-      <a href="advisors.html">Advisors</a>
+      <a href="advisors.html">Mentors</a>
       <a href="resources.html">Resources</a>
       <a href="pricing.html">Pricing</a>
       <a href="contact.html">Contact</a>

@@ -10,7 +10,17 @@
 const ADVISORS_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRYAvUMgSCz77zCmFurYGFggl47IQE23A716XA8bvGFqAJ9CSHkFiZuinlTI81LBeKwP7c7lQCi8qT_/pub?gid=1317008630&single=true&output=csv";
 
 // Fallback / starter data. Expected sheet columns, in order:
-// Name | School | Sport | Major | Bio | Fit | Photo (optional) | Slug (optional) | AvailabilityToken (optional)
+// Name | School | Sport | Major | Bio | Fit | Photo (optional) | Slug (optional) | AvailabilityToken (optional) | AthleticProgram (optional) | SchoolLogo (optional)
+//
+// AthleticProgram is only needed when it differs from School — e.g. Harvey
+// Mudd College competes athletically as part of CMS (Claremont-Mudd-Scripps),
+// so a soccer mentor there has School "Harvey Mudd College" and
+// AthleticProgram "CMS Soccer". Leave it blank and only School/Sport show.
+//
+// SchoolLogo is an optional image URL for the school in the "Schools /
+// Programs Represented" section. Leave it blank to use the clean styled
+// text treatment instead — never invent or upload a logo without the
+// school's permission.
 //
 // Slug powers the public profile/booking URLs (advisor.html?advisor=slug,
 // book.html?advisor=slug). Leave it blank in the sheet and script.js will
@@ -30,11 +40,13 @@ const ADVISORS = [
     school: "Harvey Mudd College",
     sport: "Soccer",
     major: "Engineering",
-    photo: "",
+    photo: "assets/images/advisors/ryan-liu.jpg",
     bio: "Recruited to play soccer at Harvey Mudd &mdash; one of the most academically selective schools with a genuinely competitive D3 program. Learned firsthand that generic, copy-paste emails don't get read, and now helps recruits write outreach that actually feels tailored to each school.",
     fit: "Best for: engineering-minded recruits targeting high-academic programs",
     slug: "ryan-liu",
-    availabilityToken: "rl-8f2k9q1z"
+    availabilityToken: "rl-8f2k9q1z",
+    athleticProgram: "CMS Soccer",
+    schoolLogo: ""
   },
   {
     initials: "JW",
@@ -46,6 +58,8 @@ const ADVISORS = [
     bio: "Recruited for track and field at Claremont McKenna, a highly academic liberal arts college. Learned firsthand not to rule out reach schools before even reaching out, and now helps recruits build the confidence to contact programs they might otherwise talk themselves out of.",
     fit: "Best for: recruits hesitant to reach out to highly academic reach schools",
     slug: "jason-wu",
-    availabilityToken: "jw-4m7p2x9k"
+    availabilityToken: "jw-4m7p2x9k",
+    athleticProgram: "",
+    schoolLogo: ""
   }
 ];

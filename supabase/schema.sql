@@ -275,3 +275,71 @@ as $$
 $$;
 
 grant execute on function get_advisor_availability(text) to anon, authenticated;
+
+-- Added for the unified intake -> matching -> scheduling flow: lets the
+-- client release a pending hold when the athlete switches advisors
+-- (Part 4 of that flow) without ever touching bookings directly.
+create or replace function cancel_booking_hold(p_booking_id uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update bookings set status = 'cancelled' where id = p_booking_id and status = 'pending';
+$$;
+
+grant execute on function cancel_booking_hold(uuid) to anon, authenticated;
+
+-- Fix: create_booking_hold's uniqueness check only looks at status, not
+-- expiration, so a hold that's past its 10-minute window stays 'pending'
+-- forever and permanently blocks that exact slot -- even though
+-- get_open_slots correctly stops listing it as unavailable, creating a
+-- confusing mismatch (slot looks open, but holding it always fails).
+-- This makes the function self-healing: it flips any stale expired
+-- pending hold on the target slot to 'expired' before inserting.
+create or replace function create_booking_hold(
+  p_slug text,
+  p_slot_start timestamptz,
+  p_athlete_name text,
+  p_athlete_email text,
+  p_slot_minutes int default 30
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_advisor_id uuid;
+  v_booking_id uuid;
+begin
+  select id into v_advisor_id from advisors where slug = p_slug and active = true;
+  if v_advisor_id is null then
+    raise exception 'Advisor not found';
+  end if;
+
+  update bookings
+  set status = 'expired'
+  where advisor_id = v_advisor_id
+    and start_time = p_slot_start
+    and status = 'pending'
+    and hold_expires_at <= now();
+
+  insert into bookings (advisor_id, athlete_name, athlete_email, start_time, end_time)
+  values (
+    v_advisor_id,
+    p_athlete_name,
+    p_athlete_email,
+    p_slot_start,
+    p_slot_start + make_interval(mins => p_slot_minutes)
+  )
+  returning id into v_booking_id;
+
+  return v_booking_id;
+exception
+  when unique_violation then
+    raise exception 'That slot was just taken — pick another time.';
+end;
+$$;
+
+grant execute on function create_booking_hold(text, timestamptz, text, text, int) to anon, authenticated;

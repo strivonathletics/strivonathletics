@@ -166,6 +166,11 @@ async function loadAdvisors() {
       photo: header.indexOf('Photo'),
       slug: header.indexOf('Slug'),
       token: header.indexOf('AvailabilityToken'),
+      // Optional — a school and its athletic program aren't always the same
+      // name (e.g. Harvey Mudd College competes athletically as part of
+      // CMS). Leave the sheet column blank to just not show a second line.
+      athleticProgram: header.indexOf('AthleticProgram'),
+      schoolLogo: header.indexOf('SchoolLogo'),
     };
 
     const fromSheet = body
@@ -184,6 +189,8 @@ async function loadAdvisors() {
           fit: stripQuotes(r[idx.fit]),
           slug: explicitSlug || slugify(name),
           availabilityToken: idx.token > -1 ? (r[idx.token] || '').trim() : '',
+          athleticProgram: idx.athleticProgram > -1 ? (r[idx.athleticProgram] || '').trim() : '',
+          schoolLogo: idx.schoolLogo > -1 ? (r[idx.schoolLogo] || '').trim() : '',
         };
       });
 
@@ -267,6 +274,104 @@ async function createBookingHold(slug, slotStartIso, athleteName, athleteEmail) 
   return error ? { error: error.message } : { bookingId: data };
 }
 
+// Releases a still-pending hold — used when the athlete switches to a
+// different advisor mid-flow (see the unified booking flow below) so
+// the abandoned slot doesn't stay blocked for the full 10 minutes.
+// Best-effort: if it fails, the hold still self-expires on its own.
+async function cancelBookingHold(bookingId) {
+  if (!sb || !bookingId) return;
+  await sb.rpc('cancel_booking_hold', { p_booking_id: bookingId });
+}
+
+// --- Simple, deterministic advisor matching (no AI) ---------------------
+// Scores every advisor against the athlete's quick-intake answers using
+// only structured fields already in the advisor data (sport, major,
+// school) plus a light keyword match between the requested help topic
+// and the advisor's bio/fit text. Good enough for "here are 2-3 solid
+// options," not meant to be precise.
+const HELP_TOPIC_KEYWORDS = {
+  'School Fit': ['fit', 'selective', 'academic', 'realistic', 'match'],
+  'Coach Outreach': ['outreach', 'email', 'coach', 'contact'],
+  'Camps/Showcases': ['camp', 'showcase'],
+  'Pre-Reads': ['pre-read', 'preread', 'academic index'],
+  'Recruiting Timeline': ['timeline', 'when', 'process', 'step'],
+  'General Recruiting Strategy': ['strategy', 'plan', 'advice'],
+};
+
+function scoreAdvisorMatch(intake, advisor) {
+  let score = 0;
+  const reasons = [];
+
+  if (intake.sport && advisor.sport && intake.sport.trim().toLowerCase() === advisor.sport.trim().toLowerCase()) {
+    score += 3;
+    reasons.push(`also played ${advisor.sport}`);
+  }
+
+  if (intake.major && advisor.major) {
+    const im = intake.major.trim().toLowerCase();
+    const am = advisor.major.trim().toLowerCase();
+    if (im && am && (im.includes(am) || am.includes(im))) {
+      score += 2;
+      reasons.push(`studied ${advisor.major}`);
+    }
+  }
+
+  if (intake.schools && advisor.school) {
+    if (intake.schools.toLowerCase().includes(advisor.school.toLowerCase())) {
+      score += 2;
+      reasons.push(`went to ${advisor.school}`);
+    }
+  }
+
+  if (intake.helpTopic) {
+    const keywords = HELP_TOPIC_KEYWORDS[intake.helpTopic] || [];
+    const bioText = `${advisor.bio || ''} ${advisor.fit || ''}`.toLowerCase();
+    if (keywords.some(k => bioText.includes(k))) {
+      score += 1;
+      reasons.push(`have helped athletes with ${intake.helpTopic.toLowerCase()}`);
+    }
+  }
+
+  const reasonText = reasons.length
+    ? `Good fit because they ${reasons.slice(0, 2).join(' and ')}.`
+    : `A solid option based on what you shared.`;
+
+  return { score, reasonText };
+}
+
+function getTopAdvisorMatches(intake, advisors, count = 3) {
+  return advisors
+    .map(advisor => ({ advisor, ...scoreAdvisorMatch(intake, advisor) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, count);
+}
+
+// Surfaces a real, derived "help with" tag (e.g. "Coach Outreach") by
+// testing the advisor's own bio/fit text against the same keyword sets
+// used for matching above — never a fabricated label, only ever what
+// their bio actually mentions.
+function getAdvisorTopicTags(advisor, limit = 1) {
+  const bioText = `${advisor.bio || ''} ${advisor.fit || ''}`.toLowerCase();
+  return Object.entries(HELP_TOPIC_KEYWORDS)
+    .filter(([, keywords]) => keywords.some(k => bioText.includes(k)))
+    .map(([topic]) => topic)
+    .slice(0, limit);
+}
+
+function advisorTags(advisor) {
+  return [advisor.sport, advisor.major, 'Selective D3', ...getAdvisorTopicTags(advisor)].filter(Boolean);
+}
+
+// A mentor's college and their athletic program aren't always the same
+// name — e.g. Harvey Mudd College competes athletically as part of CMS
+// (Claremont-Mudd-Scripps), so the program line should read "CMS Soccer,"
+// not "Harvey Mudd College Soccer." Falls back to the plain sport name
+// when no distinct program is set, so nothing breaks for advisors who
+// don't need the distinction.
+function advisorProgramLabel(advisor) {
+  return advisor.athleticProgram || advisor.sport || '';
+}
+
 // Render advisor cards from the shared/live data so the Home page's
 // Featured Advisors and the full Advisors page never drift apart. A grid
 // with a data-limit (the homepage teaser) is a lower-commitment context,
@@ -275,20 +380,41 @@ async function createBookingHold(slug, slotStartIso, athleteName, athleteEmail) 
 document.querySelectorAll('[data-advisor-grid]').forEach(async grid => {
   const all = await loadAdvisors();
   const isTeaser = grid.hasAttribute('data-limit');
-  const limit = isTeaser ? parseInt(grid.dataset.limit, 10) : all.length;
-  const list = all.slice(0, limit);
+
+  // ?school=<name> (e.g. from the homepage "Schools & Programs Represented"
+  // links) filters the full roster down to that one school — never applies
+  // to the homepage teaser grid, which doesn't carry that query param.
+  const schoolFilter = !isTeaser ? new URLSearchParams(window.location.search).get('school') : null;
+  const filtered = schoolFilter
+    ? all.filter(a => (a.school || '').toLowerCase() === schoolFilter.toLowerCase())
+    : all;
+
+  const limit = isTeaser ? parseInt(grid.dataset.limit, 10) : filtered.length;
+  const list = filtered.slice(0, limit);
+
+  const filterBanner = document.querySelector('[data-school-filter-banner]');
+  if (filterBanner) {
+    if (schoolFilter && list.length) {
+      filterBanner.hidden = false;
+      filterBanner.innerHTML = `Showing mentors at <strong>${schoolFilter}</strong> &middot; <a href="advisors.html">Clear filter</a>`;
+    } else {
+      filterBanner.hidden = true;
+    }
+  }
 
   if (!list.length) {
-    grid.innerHTML = `<div class="placeholder-box">Advisor profiles are on the way &mdash; check back soon.</div>`;
+    grid.innerHTML = schoolFilter
+      ? `<div class="placeholder-box">No mentors at ${schoolFilter} yet. <a href="advisors.html">View all mentors &rarr;</a></div>`
+      : `<div class="placeholder-box">Mentor profiles are on the way &mdash; check back soon.</div>`;
     return;
   }
 
   grid.innerHTML = list.map(a => {
-    const tags = [a.sport, a.major, 'Selective D3'].filter(Boolean);
+    const tags = advisorTags(a);
     const photo = a.photo
       ? `<img class="advisor-photo" src="${a.photo}" alt="${a.name}">`
       : `<div class="advisor-photo advisor-photo-initials">${a.initials}</div>`;
-    const cta = `<a class="advisor-cta" href="advisor.html?advisor=${encodeURIComponent(a.slug)}">View Advisor &rarr;</a>`;
+    const cta = `<a class="advisor-cta" href="advisor.html?advisor=${encodeURIComponent(a.slug)}">View Mentor &rarr;</a>`;
 
     return `
     <div class="advisor-card">
@@ -297,6 +423,7 @@ document.querySelectorAll('[data-advisor-grid]').forEach(async grid => {
         <div>
           <div class="advisor-name">${a.name}</div>
           <div class="advisor-college">${a.school}</div>
+          ${advisorProgramLabel(a) ? `<div class="advisor-program">${advisorProgramLabel(a)}</div>` : ''}
         </div>
       </div>
       ${tags.length ? `<div class="advisor-tags">${tags.map(t => `<span class="advisor-tag">${t}</span>`).join('')}</div>` : ''}
@@ -304,6 +431,49 @@ document.querySelectorAll('[data-advisor-grid]').forEach(async grid => {
       ${cta}
     </div>
   `;
+  }).join('');
+});
+
+// "Schools & Programs Represented" (homepage) — grouped live from the same
+// loadAdvisors() source as every other advisor render, so it only ever
+// lists schools with an actual current Strivon mentor and grows
+// automatically as more mentors are approved. Never a partnership/
+// sponsorship claim (see the disclaimer copy next to this section in
+// index.html). Each entry links to the Advisors page pre-filtered to that
+// school (?school=<name>, read by the [data-advisor-grid] renderer above).
+document.querySelectorAll('[data-program-row]').forEach(async wrap => {
+  const all = await loadAdvisors();
+
+  const bySchool = new Map();
+  all.forEach(a => {
+    if (!a.school) return;
+    if (!bySchool.has(a.school)) bySchool.set(a.school, { count: 0, logo: '' });
+    const entry = bySchool.get(a.school);
+    entry.count += 1;
+    if (!entry.logo && a.schoolLogo) entry.logo = a.schoolLogo;
+  });
+
+  if (!bySchool.size) {
+    wrap.innerHTML = `<div class="placeholder-box">Mentor schools will appear here as mentors join.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = Array.from(bySchool.entries()).map(([school, { count, logo }]) => {
+    // Logos are only ever shown if a school-permitted asset URL is set on
+    // an advisor row — never invented or fetched automatically. Otherwise
+    // a clean styled initials mark stands in, same as the advisor-photo
+    // fallback pattern used elsewhere on the site.
+    const mark = logo
+      ? `<img class="program-logo" src="${logo}" alt="${school} logo">`
+      : `<span class="program-mark">${school.split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()}</span>`;
+
+    return `
+      <a class="program-item" href="advisors.html?school=${encodeURIComponent(school)}">
+        ${mark}
+        <span class="program-name">${school}</span>
+        <span class="program-count">${count} mentor${count > 1 ? 's' : ''}</span>
+      </a>
+    `;
   }).join('');
 });
 
@@ -395,16 +565,17 @@ if (coverflowEl) {
 
     function updateProfile() {
       const a = advisors[activeIndex];
-      const tags = [a.sport, a.major, 'Selective D3'].filter(Boolean);
+      const tags = advisorTags(a);
       const fitText = (a.fit || '').replace(/^Best for:\s*/i, '');
 
       profile.innerHTML = `
         <div class="advisor-name">${a.name}</div>
-        <div class="advisor-college">${[a.school, a.sport].filter(Boolean).join(' &middot; ')}</div>
+        <div class="advisor-college">${a.school}</div>
+        ${advisorProgramLabel(a) ? `<div class="advisor-program">${advisorProgramLabel(a)}</div>` : ''}
         ${a.major ? `<div class="coverflow-major">${a.major}</div>` : ''}
         ${tags.length ? `<div class="advisor-tags">${tags.map(t => `<span class="advisor-tag">${t}</span>`).join('')}</div>` : ''}
         <p class="advisor-bio">${a.bio}</p>
-        ${fitText ? `<p class="coverflow-fit"><span class="coverflow-fit-label">Best for:</span> ${fitText}</p>` : ''}
+        ${fitText ? `<p class="coverflow-fit"><span class="coverflow-fit-label">Good for:</span> ${fitText}</p>` : ''}
         <a class="advisor-cta" href="advisor.html?advisor=${encodeURIComponent(a.slug)}">View ${a.name.split(' ')[0]} &rarr;</a>
       `;
     }
@@ -471,221 +642,48 @@ if (advisorProfileEl) {
 
     if (!a) {
       advisorProfileEl.innerHTML = `
-        <p class="lead">We couldn't find that advisor.</p>
-        <a class="advisor-cta" href="advisors.html">&larr; Back to all advisors</a>
+        <p class="lead">We couldn't find that mentor.</p>
+        <a class="advisor-cta" href="advisors.html">&larr; Back to all mentors</a>
       `;
       return;
     }
 
     document.title = `${a.name} | Strivon Athletics`;
 
-    const tags = [a.sport, a.major, 'Selective D3'].filter(Boolean);
+    const tags = advisorTags(a);
     const fitText = (a.fit || '').replace(/^Best for:\s*/i, '');
     const photo = a.photo
       ? `<img class="advisor-photo advisor-photo-lg" src="${a.photo}" alt="${a.name}">`
       : `<div class="advisor-photo advisor-photo-lg advisor-photo-initials">${a.initials}</div>`;
+
+    const ICON_PIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.5 7-11.5A7 7 0 0 0 5 9.5C5 14.5 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.3"/></svg>';
+    const ICON_SPORT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>';
+    const ICON_BOOK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6.5c-1.5-1-4-1.5-6-1.2v13c2-.3 4.5.2 6 1.2 1.5-1 4-1.5 6-1.2v-13c-2-.3-4.5.2-6 1.2z"/><path d="M12 6.5v13"/></svg>';
 
     advisorProfileEl.innerHTML = `
       <div class="advisor-profile-header">
         ${photo}
         <div>
           <div class="advisor-name advisor-profile-name">${a.name}</div>
-          <div class="advisor-college">${[a.school, a.sport].filter(Boolean).join(' &middot; ')}</div>
-          ${a.major ? `<div class="coverflow-major">${a.major}</div>` : ''}
+          <div class="advisor-info-row advisor-info-row-primary"><span class="advisor-info-icon">${ICON_PIN}</span>${a.school}</div>
+          ${advisorProgramLabel(a) ? `<div class="advisor-info-row"><span class="advisor-info-icon">${ICON_SPORT}</span>${advisorProgramLabel(a)}</div>` : ''}
+          ${a.major ? `<div class="advisor-info-row"><span class="advisor-info-icon">${ICON_BOOK}</span>${a.major}</div>` : ''}
         </div>
       </div>
       ${tags.length ? `<div class="advisor-tags advisor-profile-tags">${tags.map(t => `<span class="advisor-tag">${t}</span>`).join('')}</div>` : ''}
       <p class="advisor-bio advisor-profile-bio">${a.bio}</p>
-      ${fitText ? `<p class="coverflow-fit"><span class="coverflow-fit-label">Best for:</span> ${fitText}</p>` : ''}
+      ${fitText ? `<p class="coverflow-fit"><span class="coverflow-fit-label">Good for:</span> ${fitText}</p>` : ''}
       <div class="advisor-profile-actions">
-        <a href="book.html?advisor=${encodeURIComponent(a.slug)}" class="btn-pill btn-pill-dark">
-          <span>Book With ${a.name.split(' ')[0]}</span>
+        <a href="book-a-call.html?advisor=${encodeURIComponent(a.slug)}" class="btn-pill btn-pill-dark">
+          <span>Book a One-on-One With ${a.name.split(' ')[0]}</span>
           <span class="arrow-circle">&rarr;</span>
         </a>
-        <a href="advisors.html" class="advisor-cta">&larr; Back to all advisors</a>
+        <a href="advisors.html" class="advisor-cta">&larr; Back to all mentors</a>
       </div>
     `;
   })();
 }
 
-// Booking page (book.html?advisor=slug) — same slug-driven template
-// pattern as the profile page. Directory info (name/school/photo)
-// still comes from getAdvisorBySlug() (the Google Sheet pipeline);
-// slot data and the booking hold are real, from Supabase. Picking a
-// slot creates an actual 10-minute hold via create_booking_hold — the
-// database's unique index is what prevents two athletes from taking
-// the same time, not this client code. Real payment isn't wired up
-// yet (Phase 3), so after a hold succeeds we still route into the
-// existing working intake form (mailto), prefilled, with the hold id
-// included so Strivon can match it to the real row.
-const bookingPageEl = document.querySelector('[data-booking-page]');
-
-if (bookingPageEl) {
-  (async () => {
-    const slug = new URLSearchParams(window.location.search).get('advisor');
-    const a = await getAdvisorBySlug(slug);
-
-    if (!a) {
-      bookingPageEl.innerHTML = `
-        <p class="lead">We couldn't find that advisor.</p>
-        <a class="advisor-cta" href="advisors.html">&larr; Back to all advisors</a>
-      `;
-      return;
-    }
-
-    document.title = `Book With ${a.name} | Strivon Athletics`;
-
-    const dateFmt = (d) => d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-
-    // Look forward 14 days from today — not any specific weekday. Which
-    // days actually show up is entirely driven by what the advisor
-    // saved in advisor-availability.html; a day with no saved block
-    // just never appears, whatever day of the week it is.
-    const rangeStart = new Date();
-    const rangeEnd = new Date();
-    rangeEnd.setDate(rangeEnd.getDate() + 13);
-
-    const photo = a.photo
-      ? `<img class="advisor-photo" src="${a.photo}" alt="${a.name}">`
-      : `<div class="advisor-photo advisor-photo-initials">${a.initials}</div>`;
-
-    bookingPageEl.innerHTML = `
-      <div class="booking-advisor-head">
-        ${photo}
-        <div>
-          <div class="advisor-name">${a.name}</div>
-          <div class="advisor-college">${[a.school, a.sport].filter(Boolean).join(' &middot; ')}</div>
-        </div>
-      </div>
-
-      <div class="session-card">
-        <div class="session-title">30-Minute Recruiting Strategy Call</div>
-        <div class="session-price">$30</div>
-      </div>
-
-      <p class="card-hint booking-slots-note" data-slots-note>Loading available times&hellip;</p>
-
-      <div class="slot-days" data-slot-days></div>
-
-      <div class="slot-selected" data-slot-selected hidden>
-        <p class="eyebrow">Selected</p>
-        <p class="slot-selected-when" data-slot-selected-when></p>
-        <p class="slot-selected-session">30-minute strategy call &middot; $30</p>
-
-        <form class="contact-form slot-confirm-form" data-slot-confirm-form>
-          <label>
-            Your Name
-            <input type="text" name="name" required>
-          </label>
-          <label>
-            Your Email
-            <input type="email" name="email" required>
-          </label>
-          <button type="submit" class="btn-pill" data-confirm-btn>
-            <span>Hold This Time &amp; Continue</span>
-            <span class="arrow-circle">&rarr;</span>
-          </button>
-          <p class="form-status" data-confirm-error hidden></p>
-        </form>
-      </div>
-    `;
-
-    const slotDaysEl = bookingPageEl.querySelector('[data-slot-days]');
-    const slotsNoteEl = bookingPageEl.querySelector('[data-slots-note]');
-    const selectedBox = bookingPageEl.querySelector('[data-slot-selected]');
-    const selectedWhen = bookingPageEl.querySelector('[data-slot-selected-when]');
-    const confirmForm = bookingPageEl.querySelector('[data-slot-confirm-form]');
-    const confirmError = bookingPageEl.querySelector('[data-confirm-error]');
-
-    let currentSlotIso = null;
-
-    async function renderSlots() {
-      selectedBox.hidden = true;
-      confirmError.hidden = true;
-      currentSlotIso = null;
-
-      if (!sb) {
-        slotsNoteEl.textContent = 'Live scheduling isn’t connected on this page yet.';
-        slotDaysEl.innerHTML = '';
-        return;
-      }
-
-      const openIsoTimes = await getOpenSlots(slug, rangeStart, rangeEnd);
-
-      if (!openIsoTimes.length) {
-        slotsNoteEl.textContent = `${a.name.split(' ')[0]} doesn't have any open times in the next two weeks.`;
-        slotDaysEl.innerHTML = '';
-        return;
-      }
-
-      slotsNoteEl.textContent = 'Choose a time.';
-
-      // Group by calendar date, preserving chronological order — no
-      // assumption about which weekdays show up, only that whatever
-      // Supabase returns is grouped and displayed in the order it falls.
-      const byDate = new Map();
-      openIsoTimes.forEach(iso => {
-        const key = slotDateStr(iso);
-        if (!byDate.has(key)) byDate.set(key, []);
-        byDate.get(key).push(iso);
-      });
-
-      const days = Array.from(byDate.entries())
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([dateKey, slots]) => ({
-          date: new Date(`${dateKey}T00:00:00`),
-          slots,
-        }));
-
-      slotDaysEl.innerHTML = days.map(day => `
-        <div class="slot-day">
-          <p class="slot-day-label">${dateFmt(day.date)}</p>
-          <div class="slot-times">${day.slots.map(iso => `<button type="button" class="slot-btn" data-iso="${iso}">${formatSlotLabel(iso)}</button>`).join('')}</div>
-        </div>
-      `).join('');
-
-      slotDaysEl.querySelectorAll('.slot-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          slotDaysEl.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('is-selected'));
-          btn.classList.add('is-selected');
-
-          currentSlotIso = btn.dataset.iso;
-          selectedWhen.textContent = `${dateFmt(new Date(`${slotDateStr(currentSlotIso)}T00:00:00`))} · ${formatSlotLabel(currentSlotIso)}`;
-          selectedBox.hidden = false;
-          confirmError.hidden = true;
-          selectedBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        });
-      });
-    }
-
-    confirmForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (!currentSlotIso) return;
-
-      const data = new FormData(confirmForm);
-      const name = data.get('name');
-      const email = data.get('email');
-
-      const result = await createBookingHold(slug, currentSlotIso, name, email);
-
-      if (result.error) {
-        confirmError.textContent = result.error;
-        confirmError.hidden = false;
-        await renderSlots(); // the slot may have just been taken — refresh the list
-        return;
-      }
-
-      const params = new URLSearchParams({
-        advisor: a.name,
-        slot: `${dateFmt(new Date(`${slotDateStr(currentSlotIso)}T00:00:00`))} at ${formatSlotLabel(currentSlotIso)}`,
-        holdId: result.bookingId,
-      });
-      window.location.href = `book-a-call.html?${params.toString()}#bookingForm`;
-    });
-
-    await renderSlots();
-  })();
-}
 
 // Advisor private availability editor (advisor-availability.html?token=...)
 // Reads and writes through Supabase's token-gated RPCs (see
@@ -854,55 +852,484 @@ if (form) {
   });
 }
 
-// Book a Call — temporary intake form (mailto) while the real
-// scheduling/payment steps on that page aren't wired up yet.
-const bookingForm = document.getElementById('bookingForm');
+// Unified booking flow (book-a-call.html) — Quick Intake -> Recommended
+// Advisors -> Book With {Advisor} -> Payment placeholder, all on one
+// page with progressive reveal. Reuses the exact same Phase 2 Supabase
+// helpers as before (getOpenSlots/createBookingHold/etc.) — only the
+// surrounding flow is new. Arriving with ?advisor=slug (from an
+// advisor's profile page) skips the matching step and goes straight to
+// that advisor's schedule after the same short intake.
+const bookingFlowEl = document.querySelector('[data-booking-flow]');
 
-if (bookingForm) {
-  // Arrived from an advisor's booking page with a chosen slot? Prefill
-  // so nothing has to be retyped (mirrors the ?advisor= prefill on the
-  // contact form above).
-  const bookingParams = new URLSearchParams(window.location.search);
-  const requestedAdvisor = bookingParams.get('advisor');
-  const requestedSlot = bookingParams.get('slot');
-  const holdId = bookingParams.get('holdId');
+if (bookingFlowEl) {
+  (async () => {
+    const preselectedSlug = new URLSearchParams(window.location.search).get('advisor');
 
-  if (requestedSlot) {
-    const availabilityField = bookingForm.querySelector('[name="availability"]');
-    if (availabilityField) availabilityField.value = requestedSlot;
-  }
-  if (requestedAdvisor) {
-    const notesField = bookingForm.querySelector('[name="notes"]');
-    if (notesField) {
-      const holdLine = holdId ? ` (hold id: ${holdId})` : '';
-      notesField.value = `Requested advisor: ${requestedAdvisor}${holdLine}\n\n`;
+    const state = {
+      intake: null,
+      advisor: null,
+      holdId: null,
+      holdName: null,
+      holdEmail: null,
+      slotDisplay: null,
+    };
+
+    bookingFlowEl.innerHTML = `
+      <div class="step-indicator" data-step-indicator>
+        <div class="step-indicator-item" data-step="1"><span class="step-indicator-num">1</span><span class="step-indicator-label">About the Athlete</span></div>
+        <span class="step-indicator-sep"></span>
+        <div class="step-indicator-item" data-step="2"><span class="step-indicator-num">2</span><span class="step-indicator-label">Mentor</span></div>
+        <span class="step-indicator-sep"></span>
+        <div class="step-indicator-item" data-step="3"><span class="step-indicator-num">3</span><span class="step-indicator-label">Time</span></div>
+        <span class="step-indicator-sep"></span>
+        <div class="step-indicator-item" data-step="4"><span class="step-indicator-num">4</span><span class="step-indicator-label">Payment</span></div>
+      </div>
+
+      <div class="intake-step" data-intake-step>
+        <p class="eyebrow">Quick Intake</p>
+        <h3 data-intake-title>A few details before we match you.</h3>
+        <p class="lead">Tell us a few details so we can recommend the most relevant advisors. Usually takes less than 2 minutes.</p>
+
+        <form class="contact-form intake-form" data-intake-form>
+          <label>
+            Sport
+            <input type="text" name="sport" required>
+          </label>
+          <label>
+            Graduation Year
+            <input type="text" name="gradYear" required>
+          </label>
+          <label>
+            <span>GPA / Academic Level <span class="field-optional">(optional)</span></span>
+            <input type="text" name="gpa" placeholder="e.g. 3.9 UW, or top 10%">
+          </label>
+          <label>
+            <span>Intended Major <span class="field-optional">(optional)</span></span>
+            <input type="text" name="major">
+          </label>
+          <label>
+            <span>Schools You're Interested In <span class="field-optional">(optional)</span></span>
+            <input type="text" name="schools" placeholder="e.g. Harvey Mudd, or STEM-focused D3 schools">
+          </label>
+          <label>
+            What do you want help with?
+            <select name="helpTopic" required>
+              <option value="" disabled selected>Choose one</option>
+              <option>School Fit</option>
+              <option>Coach Outreach</option>
+              <option>Camps/Showcases</option>
+              <option>Pre-Reads</option>
+              <option>Recruiting Timeline</option>
+              <option>General Recruiting Strategy</option>
+            </select>
+          </label>
+          <label>
+            Who will attend the call?
+            <select name="attendees" required>
+              <option value="" disabled selected>Choose one</option>
+              <option>Athlete</option>
+              <option>Athlete + Parent/Guardian</option>
+              <option>Parent/Guardian</option>
+            </select>
+          </label>
+          <label>
+            <span>Parent/Guardian Email <span class="field-optional">(optional)</span></span>
+            <input type="email" name="parentEmail" placeholder="For scheduling updates, if different from the athlete's">
+          </label>
+          <button type="submit" class="btn-pill" data-intake-submit>
+            <span data-intake-submit-label>Find My Mentor Matches</span>
+            <span class="arrow-circle">&rarr;</span>
+          </button>
+        </form>
+      </div>
+
+      <div class="matches-step" data-matches-step hidden>
+        <p class="eyebrow">Your Matches</p>
+        <h3>Mentors who fit well</h3>
+        <p class="lead">Based on what you shared &mdash; or browse the full roster if you'd rather choose yourself.</p>
+        <div class="advisor-grid match-grid" data-match-grid></div>
+        <div class="section-cta"><a href="advisors.html" class="btn-pill-outline-dark">View All Mentors &rarr;</a></div>
+      </div>
+
+      <div class="schedule-step" data-schedule-step hidden>
+        <div data-booking-inner></div>
+      </div>
+
+      <div class="payment-step" data-payment-step hidden>
+        <p class="eyebrow">Almost There</p>
+        <h3>Complete Your Booking</h3>
+        <p class="lead">Secure online checkout is coming soon. Confirm below and we'll follow up by email with a payment link to lock in your spot.</p>
+        <button type="button" class="btn-pill" data-confirm-booking-btn>
+          <span>Confirm Booking Request</span>
+          <span class="arrow-circle">&rarr;</span>
+        </button>
+        <p class="form-status" data-payment-status hidden>Thanks &mdash; we've got your request and will follow up by email shortly to lock in payment and your spot.</p>
+      </div>
+    `;
+
+    const stepIndicatorEl = bookingFlowEl.querySelector('[data-step-indicator]');
+    const stepIndicatorItems = Array.from(stepIndicatorEl.querySelectorAll('[data-step]'));
+
+    function setStep(activeStep) {
+      stepIndicatorItems.forEach(item => {
+        const n = parseInt(item.dataset.step, 10);
+        item.classList.toggle('is-active', n === activeStep);
+        item.classList.toggle('is-done', n < activeStep);
+      });
     }
-  }
 
-  bookingForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const data = new FormData(bookingForm);
-    const name = data.get('name');
+    const intakeStepEl = bookingFlowEl.querySelector('[data-intake-step]');
+    const intakeTitleEl = bookingFlowEl.querySelector('[data-intake-title]');
+    const intakeForm = bookingFlowEl.querySelector('[data-intake-form]');
+    const intakeSubmitLabel = bookingFlowEl.querySelector('[data-intake-submit-label]');
+    const matchesStepEl = bookingFlowEl.querySelector('[data-matches-step]');
+    const matchGridEl = bookingFlowEl.querySelector('[data-match-grid]');
+    const scheduleStepEl = bookingFlowEl.querySelector('[data-schedule-step]');
+    const bookingInnerEl = bookingFlowEl.querySelector('[data-booking-inner]');
+    const paymentStepEl = bookingFlowEl.querySelector('[data-payment-step]');
+    const confirmBookingBtn = bookingFlowEl.querySelector('[data-confirm-booking-btn]');
+    const paymentStatusEl = bookingFlowEl.querySelector('[data-payment-status]');
 
-    const fields = [
-      ['Name', name],
-      ['Email', data.get('email')],
-      ['Sport', data.get('sport')],
-      ['Current School', data.get('school')],
-      ['Graduation Year', data.get('gradYear')],
-      ['GPA', data.get('gpa')],
-      ['Preferred Days/Times', data.get('availability')],
-      ['Notes', data.get('notes')],
-    ].filter(([, value]) => value && value.trim());
+    setStep(1);
 
-    const subject = encodeURIComponent(`Call Request from ${name}`);
-    const body = encodeURIComponent(fields.map(([label, value]) => `${label}: ${value}`).join('\n'));
+    let preselectedAdvisor = null;
+    if (preselectedSlug) {
+      preselectedAdvisor = await getAdvisorBySlug(preselectedSlug);
+      if (preselectedAdvisor) {
+        intakeTitleEl.textContent = `A few details before we book with ${preselectedAdvisor.name.split(' ')[0]}.`;
+        intakeSubmitLabel.textContent = 'Continue';
+      }
+    }
 
-    window.location.href = `mailto:strivonathletics@gmail.com?subject=${subject}&body=${body}`;
+    // --- Scheduling section (date -> time -> hold) --------------------
+    // Same logic as the old book.html picker, just parametrized so it
+    // can be (re)rendered for whichever advisor is currently active.
+    // Re-invoking this fully replaces the container's contents, so
+    // switching advisors can never leak a previous date/time selection.
+    async function renderScheduling(advisor) {
+      state.advisor = advisor;
+      state.holdId = null;
+      state.holdName = null;
+      state.holdEmail = null;
+      state.slotDisplay = null;
+      paymentStepEl.hidden = true;
+      paymentStatusEl.hidden = true;
 
-    const status = document.getElementById('bookingFormStatus');
-    if (status) status.hidden = false;
-  });
+      const fullDateFmt = (d) => d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const dowFmt = (d) => d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
+      const mdFmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+      const dateFromKey = (key) => new Date(`${key}T00:00:00`);
+
+      const rangeStart = new Date();
+      const rangeEnd = new Date();
+      rangeEnd.setDate(rangeEnd.getDate() + 13);
+
+      const photo = advisor.photo
+        ? `<img class="advisor-photo" src="${advisor.photo}" alt="${advisor.name}">`
+        : `<div class="advisor-photo advisor-photo-initials">${advisor.initials}</div>`;
+
+      bookingInnerEl.innerHTML = `
+        <p class="eyebrow">Book With ${advisor.name.split(' ')[0]}</p>
+        <div class="booking-advisor-head">
+          ${photo}
+          <div>
+            <div class="advisor-name">${advisor.name}</div>
+            <div class="advisor-college">${advisor.school}</div>
+            ${advisorProgramLabel(advisor) ? `<div class="advisor-program">${advisorProgramLabel(advisor)}</div>` : ''}
+          </div>
+        </div>
+
+        <div class="session-card">
+          <div class="session-title">30-Minute One-on-One Recruiting Session</div>
+          <div class="advisor-tags">
+            ${['School Fit', 'Coach Outreach', 'Recruiting Timeline', 'Camps &amp; Pre-Reads', 'Your Specific Situation'].map(t => `<span class="advisor-tag">${t}</span>`).join('')}
+          </div>
+          <div class="session-footer">
+            <span class="session-price-label">Private call with ${advisor.name.split(' ')[0]}</span>
+            <div class="session-price">$30</div>
+          </div>
+        </div>
+
+        <p class="card-hint booking-slots-note" data-slots-note>Loading available dates&hellip;</p>
+
+        <div class="date-picker" data-date-picker></div>
+        <div class="slot-times" data-slot-times></div>
+
+        <div class="slot-selected" data-slot-selected hidden>
+          <p class="eyebrow">Selected</p>
+          <p class="slot-selected-when" data-slot-selected-when></p>
+          <p class="slot-selected-session">30-minute strategy call &middot; $30</p>
+
+          <form class="contact-form slot-confirm-form" data-slot-confirm-form>
+            <label>
+              Your Name
+              <input type="text" name="name" required>
+            </label>
+            <label>
+              Your Email
+              <input type="email" name="email" required>
+            </label>
+            <button type="submit" class="btn-pill" data-confirm-btn>
+              <span>Hold This Time</span>
+              <span class="arrow-circle">&rarr;</span>
+            </button>
+            <p class="form-status" data-confirm-error hidden></p>
+          </form>
+
+          <div class="hold-confirmed" data-hold-confirmed hidden>
+            <p class="hold-confirmed-text">Your time will be held for 10 minutes while you complete checkout.</p>
+            <button type="button" class="btn-pill" data-continue-payment-btn>
+              <span>Continue to Payment</span>
+              <span class="arrow-circle">&rarr;</span>
+            </button>
+          </div>
+        </div>
+      `;
+
+      const datePickerEl = bookingInnerEl.querySelector('[data-date-picker]');
+      const slotTimesEl = bookingInnerEl.querySelector('[data-slot-times]');
+      const slotsNoteEl = bookingInnerEl.querySelector('[data-slots-note]');
+      const selectedBox = bookingInnerEl.querySelector('[data-slot-selected]');
+      const selectedWhen = bookingInnerEl.querySelector('[data-slot-selected-when]');
+      const confirmForm = bookingInnerEl.querySelector('[data-slot-confirm-form]');
+      const confirmError = bookingInnerEl.querySelector('[data-confirm-error]');
+      const holdConfirmedEl = bookingInnerEl.querySelector('[data-hold-confirmed]');
+      const continuePaymentBtn = bookingInnerEl.querySelector('[data-continue-payment-btn]');
+
+      let byDate = new Map();
+      let selectedDateKey = null;
+      let currentSlotIso = null;
+
+      function resetSelection() {
+        selectedBox.hidden = true;
+        confirmError.hidden = true;
+        confirmForm.hidden = false;
+        holdConfirmedEl.hidden = true;
+        currentSlotIso = null;
+      }
+
+      function renderTimesForSelectedDate() {
+        resetSelection();
+        const slots = byDate.get(selectedDateKey) || [];
+
+        slotTimesEl.innerHTML = slots.map(iso =>
+          `<button type="button" class="slot-btn" data-iso="${iso}">${formatSlotLabel(iso)}</button>`
+        ).join('');
+
+        slotTimesEl.querySelectorAll('.slot-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            slotTimesEl.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('is-selected'));
+            btn.classList.add('is-selected');
+
+            currentSlotIso = btn.dataset.iso;
+            selectedWhen.textContent = `${fullDateFmt(dateFromKey(selectedDateKey))} · ${formatSlotLabel(currentSlotIso)}`;
+            selectedBox.hidden = false;
+            confirmError.hidden = true;
+            confirmForm.hidden = false;
+            holdConfirmedEl.hidden = true;
+            selectedBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          });
+        });
+      }
+
+      function selectDate(dateKey) {
+        selectedDateKey = dateKey;
+        datePickerEl.querySelectorAll('.date-pill').forEach(p => p.classList.toggle('is-selected', p.dataset.date === dateKey));
+        renderTimesForSelectedDate();
+      }
+
+      async function loadAvailability() {
+        resetSelection();
+        selectedDateKey = null;
+        datePickerEl.innerHTML = '';
+        slotTimesEl.innerHTML = '';
+
+        if (!sb) {
+          slotsNoteEl.textContent = 'Live scheduling isn’t connected on this page yet.';
+          return;
+        }
+
+        const openIsoTimes = await getOpenSlots(advisor.slug, rangeStart, rangeEnd);
+
+        const now = Date.now();
+        const futureIsoTimes = openIsoTimes.filter(iso => new Date(iso).getTime() > now);
+
+        byDate = new Map();
+        futureIsoTimes.forEach(iso => {
+          const key = slotDateStr(iso);
+          if (!byDate.has(key)) byDate.set(key, []);
+          byDate.get(key).push(iso);
+        });
+
+        const dateKeys = Array.from(byDate.keys()).sort();
+
+        if (!dateKeys.length) {
+          slotsNoteEl.textContent = `${advisor.name.split(' ')[0]} doesn't have any open times in the next two weeks.`;
+          return;
+        }
+
+        slotsNoteEl.textContent = 'Choose a date.';
+
+        datePickerEl.innerHTML = dateKeys.map(key => {
+          const d = dateFromKey(key);
+          return `
+            <button type="button" class="date-pill" data-date="${key}">
+              <span class="date-pill-dow">${dowFmt(d)}</span>
+              <span class="date-pill-day">${mdFmt(d)}</span>
+            </button>
+          `;
+        }).join('');
+
+        datePickerEl.querySelectorAll('.date-pill').forEach(btn => {
+          btn.addEventListener('click', () => selectDate(btn.dataset.date));
+        });
+
+        selectDate(dateKeys[0]);
+      }
+
+      confirmForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!currentSlotIso) return;
+
+        const data = new FormData(confirmForm);
+        const name = data.get('name');
+        const email = data.get('email');
+
+        const result = await createBookingHold(advisor.slug, currentSlotIso, name, email);
+
+        if (result.error) {
+          confirmError.textContent = result.error;
+          confirmError.hidden = false;
+          await loadAvailability(); // the slot may have just been taken — refresh everything
+          return;
+        }
+
+        state.holdId = result.bookingId;
+        state.holdName = name;
+        state.holdEmail = email;
+        state.slotDisplay = `${fullDateFmt(dateFromKey(selectedDateKey))} at ${formatSlotLabel(currentSlotIso)}`;
+
+        confirmForm.hidden = true;
+        holdConfirmedEl.hidden = false;
+      });
+
+      continuePaymentBtn.addEventListener('click', () => {
+        setStep(4);
+        paymentStepEl.hidden = false;
+        paymentStatusEl.hidden = true;
+        paymentStepEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+
+      await loadAvailability();
+    }
+
+    // --- Matches ---------------------------------------------------------
+    function renderMatches(matches) {
+      matchGridEl.innerHTML = matches.map(({ advisor, reasonText }) => {
+        const tags = advisorTags(advisor);
+        const photo = advisor.photo
+          ? `<img class="advisor-photo" src="${advisor.photo}" alt="${advisor.name}">`
+          : `<div class="advisor-photo advisor-photo-initials">${advisor.initials}</div>`;
+
+        return `
+          <div class="advisor-card match-card" data-match-slug="${advisor.slug}">
+            <div class="advisor-card-top">
+              ${photo}
+              <div>
+                <div class="advisor-name">${advisor.name}</div>
+                <div class="advisor-college">${advisor.school}</div>
+                <div class="advisor-program">${[advisorProgramLabel(advisor), advisor.major].filter(Boolean).join(' &middot; ')}</div>
+              </div>
+            </div>
+            ${tags.length ? `<div class="advisor-tags">${tags.map(t => `<span class="advisor-tag">${t}</span>`).join('')}</div>` : ''}
+            <p class="match-reason">${reasonText}</p>
+            <button type="button" class="advisor-cta" data-select-advisor>Select ${advisor.name.split(' ')[0]} &rarr;</button>
+          </div>
+        `;
+      }).join('');
+
+      matchGridEl.querySelectorAll('[data-match-slug]').forEach((card, i) => {
+        card.querySelector('[data-select-advisor]').addEventListener('click', () => selectAdvisor(matches[i].advisor, card));
+      });
+    }
+
+    async function selectAdvisor(advisor, cardEl) {
+      // Part 4: switching advisors releases any hold on the previous one
+      // and never carries over date/time state — renderScheduling()
+      // always rebuilds the whole section fresh.
+      if (state.holdId) {
+        await cancelBookingHold(state.holdId);
+      }
+
+      matchGridEl.querySelectorAll('.match-card').forEach(c => c.classList.remove('is-selected'));
+      if (cardEl) cardEl.classList.add('is-selected');
+
+      setStep(3);
+      scheduleStepEl.hidden = false;
+      await renderScheduling(advisor);
+      scheduleStepEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // --- Intake ------------------------------------------------------
+    intakeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = new FormData(intakeForm);
+      state.intake = {
+        sport: data.get('sport'),
+        gradYear: data.get('gradYear'),
+        gpa: data.get('gpa'),
+        major: data.get('major'),
+        schools: data.get('schools'),
+        helpTopic: data.get('helpTopic'),
+        attendees: data.get('attendees'),
+        parentEmail: data.get('parentEmail'),
+      };
+
+      intakeStepEl.hidden = true;
+
+      if (preselectedAdvisor) {
+        // Direct "Book With {Advisor}" path — skip matching entirely.
+        setStep(3);
+        scheduleStepEl.hidden = false;
+        await renderScheduling(preselectedAdvisor);
+        scheduleStepEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
+      const allAdvisors = await loadAdvisors();
+      const matches = getTopAdvisorMatches(state.intake, allAdvisors, 3);
+
+      setStep(2);
+      matchesStepEl.hidden = false;
+      renderMatches(matches);
+      matchesStepEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    // --- Payment placeholder ------------------------------------------
+    confirmBookingBtn.addEventListener('click', () => {
+      const fields = [
+        ['Name', state.holdName],
+        ['Email', state.holdEmail],
+        ['Mentor', state.advisor ? state.advisor.name : ''],
+        ['Time', state.slotDisplay],
+        ['Hold ID', state.holdId],
+        ['Sport', state.intake && state.intake.sport],
+        ['Graduation Year', state.intake && state.intake.gradYear],
+        ['GPA', state.intake && state.intake.gpa],
+        ['Intended Major', state.intake && state.intake.major],
+        ['Schools of Interest', state.intake && state.intake.schools],
+        ['Wants Help With', state.intake && state.intake.helpTopic],
+        ['Who Will Attend', state.intake && state.intake.attendees],
+        ['Parent/Guardian Email', state.intake && state.intake.parentEmail],
+      ].filter(([, value]) => value && String(value).trim());
+
+      const subject = encodeURIComponent(`Call Request from ${state.holdName || 'an athlete'}`);
+      const body = encodeURIComponent(fields.map(([label, value]) => `${label}: ${value}`).join('\n'));
+
+      window.location.href = `mailto:strivonathletics@gmail.com?subject=${subject}&body=${body}`;
+      paymentStatusEl.hidden = false;
+    });
+  })();
 }
 
 // Advisor application form posts into a hidden iframe so the page never

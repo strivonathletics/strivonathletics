@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Book a Call | Strivon Athletics</title>
-<meta name="description" content="Book a recruiting strategy call with Strivon Athletics: complete your athlete profile, choose a time, pay, and confirm.">
+<meta name="description" content="Book a one-on-one recruiting call with Strivon Athletics: share a few details, get matched with a mentor, and pick a time.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700;9..144,800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,7 +20,7 @@
   <div class="tabs" id="tabs">
     <a href="index.html" class="tab-link">Home</a>
     <a href="how-it-works.html" class="tab-link">How It Works</a>
-    <a href="advisors.html" class="tab-link">Advisors</a>
+    <a href="advisors.html" class="tab-link">Mentors</a>
     <a href="resources.html" class="tab-link">Resources</a>
     <a href="pricing.html" class="tab-link">Pricing</a>
     <a href="book-a-call.html" class="tab-link active">Book a Call</a>
@@ -32,107 +32,13 @@
   <section class="section">
     <div class="section-banner">
       <p class="eyebrow">Book a Call</p>
-      <h2>Four steps to your recruiting strategy call.</h2>
+      <h2>Get matched, then book &mdash; all in one place.</h2>
     </div>
 
-    <div class="section-inner">
-      <div class="tile-grid">
-        <div class="tile">
-          <div class="tile-num">01</div>
-          <h3>Complete Athlete Profile</h3>
-          <p>Tell us about your sport, academics, and recruiting progress.</p>
-        </div>
-        <div class="tile">
-          <div class="tile-num">02</div>
-          <h3>Choose a Time</h3>
-          <p>Pick a slot that works for you.</p>
-        </div>
-        <div class="tile">
-          <div class="tile-num">03</div>
-          <h3>Payment</h3>
-          <p>Secure checkout for your $30 call.</p>
-        </div>
-        <div class="tile">
-          <div class="tile-num">04</div>
-          <h3>Confirmation</h3>
-          <p>You'll receive a confirmation with everything you need.</p>
-        </div>
+    <div class="section-inner narrow">
+      <div class="booking-flow" data-booking-flow>
+        <p class="card-hint">Loading&hellip;</p>
       </div>
-    </div>
-  </section>
-
-  <section class="section panel-bg-section">
-    <div class="section-inner">
-      <p class="eyebrow">Step 1</p>
-      <h2>Athlete Profile</h2>
-      <p class="card-hint">Online scheduling and payment are coming soon &mdash; for now, submit your info below and we'll email you to confirm a time.</p>
-
-      <div class="mission-card">
-        <!--
-          Temporary intake: submits as a plain mailto (see #bookingForm
-          in script.js) so it works with zero backend while the real
-          Calendly/Stripe steps below are still being built.
-        -->
-        <form id="bookingForm" class="contact-form">
-          <label>
-            Name
-            <input type="text" name="name" required>
-          </label>
-          <label>
-            Email
-            <input type="email" name="email" required>
-          </label>
-          <label>
-            Sport
-            <input type="text" name="sport" required>
-          </label>
-          <label>
-            Current School
-            <input type="text" name="school" required>
-          </label>
-          <label>
-            Graduation Year
-            <input type="text" name="gradYear" required>
-          </label>
-          <label>
-            <span>GPA <span class="field-optional">(optional)</span></span>
-            <input type="text" name="gpa">
-          </label>
-
-          <p class="field-group-note">A couple optional details that help us prep for the call.</p>
-
-          <label>
-            <span>Preferred days/times <span class="field-optional">(optional)</span></span>
-            <input type="text" name="availability" placeholder="e.g. weekday evenings, weekend mornings">
-          </label>
-          <label>
-            <span>Anything else we should know? <span class="field-optional">(optional)</span></span>
-            <textarea name="notes" rows="3"></textarea>
-          </label>
-
-          <button type="submit" class="btn-pill">
-            <span>Submit &amp; Request a Time</span>
-            <span class="arrow-circle">&rarr;</span>
-          </button>
-          <p class="form-status" id="bookingFormStatus" hidden>Thanks &mdash; we'll email you shortly to confirm a time.</p>
-        </form>
-      </div>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="section-inner">
-      <p class="eyebrow">Step 2</p>
-      <h2>Choose a Time</h2>
-      <p class="lead">Online scheduling is coming soon. For now, reply to our confirmation email with a few times that work and we'll lock one in together.</p>
-    </div>
-  </section>
-
-  <section class="section panel-bg-section">
-    <div class="section-inner">
-      <p class="eyebrow">Step 3</p>
-      <h2>Payment</h2>
-      <p class="lead">Secure online checkout is coming soon. Once your time is confirmed, we'll send a payment link for the $30 call by email.</p>
     </div>
   </section>
 
@@ -154,7 +60,7 @@
     <nav class="footer-nav">
       <a href="index.html">Home</a>
       <a href="how-it-works.html">How It Works</a>
-      <a href="advisors.html">Advisors</a>
+      <a href="advisors.html">Mentors</a>
       <a href="resources.html">Resources</a>
       <a href="pricing.html">Pricing</a>
       <a href="contact.html">Contact</a>
@@ -167,6 +73,9 @@
   </div>
 </footer>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="supabase-config.js"></script>
+<script src="advisors-data.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
